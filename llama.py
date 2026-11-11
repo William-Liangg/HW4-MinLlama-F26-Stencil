@@ -236,10 +236,10 @@ class Llama(LlamaPreTrainedModel):
         for layer_id in range(config.n_layers):
             self.layers.append(LlamaLayer(layer_id, config))
         self.norm = RMSNorm(config.dim, eps=config.layer_norm_eps)
-        self.res = nn.Linear(config.dim, config.vocab_size, bias=False)
+        self.output = nn.Linear(config.dim, config.vocab_size, bias=False)
 
         # share the unembedding parameters with the embedding parameters
-        self.tok_embeddings.weight = self.res.weight # https://paperswithcode.com/method/weight-tying
+        self.tok_embeddings.weight = self.output.weight # https://paperswithcode.com/method/weight-tying
 
         # some useful precompute for the RoPE relative positional embeddings
 
@@ -266,7 +266,7 @@ class Llama(LlamaPreTrainedModel):
         2) Run the embedded tokens through the stack of transformer layers
            (self.layers), followed by the final RMSNorm (self.norm).
         3) Project the final hidden state to logits over the vocabulary
-           (self.res). If `targets` is None (inference time), it is
+           (self.output). If `targets` is None (inference time), it is
            sufficient (and more efficient) to only compute logits for the
            very last position in the sequence, since that's the only one
            needed for next-token prediction; keep the time dimension by
@@ -289,9 +289,9 @@ class Llama(LlamaPreTrainedModel):
         h = self.norm(h)
 
         if targets is not None:
-            logits = self.res(h)
+            logits = self.output(h)
         else:
-            logits = self.res(h[:, [-1], :])
+            logits = self.output(h[:, [-1], :])
 
         return logits, h
 

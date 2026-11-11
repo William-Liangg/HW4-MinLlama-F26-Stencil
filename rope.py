@@ -65,14 +65,22 @@ def apply_rotary_emb(
     key_real, key_imag = key.float().reshape(key.shape[:-1] + (-1, 2)).unbind(-1)
     # This separates each query/key vector into its odd and even indices (assuming *one-indexing*).
     # query_real contains q_1, q_3, q_5, ... and query_imag contains q_2, q_4, q_6, ...
-
+   
     # First, compute the trigonometric values in the second and fourth columns in
     # equation (34) of the paper (linked above).
+    freqs = 1.0 / (theta ** (torch.arange(0, head_dim, 2, device=device).float() / head_dim))
+    positions = torch.arange(seqlen, device=device)
+    angles = torch.outer(positions, freqs)
 
+    cos = reshape_for_broadcast(torch.cos(angles), query_real)
+    sin = reshape_for_broadcast(torch.sin(angles), query_real)
     # Then, combine these trigonometric values with the tensors query_real, query_imag,
     # key_real, and key_imag.
+    query_out_real = query_real * cos - query_imag * sin
+    query_out_imag = query_real * sin + query_imag * cos
 
-    raise NotImplementedError
+    key_out_real = key_real * cos - key_imag * sin
+    key_out_imag = key_real * sin + key_imag * cos
 
     # Re-interleave the rotated pairs back into the original head_dim layout.
     query_out = torch.stack((query_out_real, query_out_imag), dim=-1).flatten(3).type_as(query)

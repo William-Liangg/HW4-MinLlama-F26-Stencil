@@ -50,7 +50,7 @@ class RMSNorm(torch.nn.Module):
             torch.Tensor: The normalized tensor.
         """
         # todo
-        raise NotImplementedError
+        return x / torch.sqrt(torch.mean(x ** 2, dim=-1, keepdim=True) + self.eps)
 
     def forward(self, x):
         """
@@ -60,11 +60,11 @@ class RMSNorm(torch.nn.Module):
             x (torch.Tensor): The input tensor.
 
         Returns:
-            torch.Tensor: The output tensor after applying RMSNorm.
+            torch.Tensor: The res tensor after applying RMSNorm.
 
         """
-        output = self._norm(x.float()).type_as(x)
-        return output * self.weight
+        res = self._norm(x.float()).type_as(x)
+        return res * self.weight
 
 class Attention(nn.Module):
     def __init__(self, config: LlamaConfig):
@@ -103,7 +103,12 @@ class Attention(nn.Module):
         not use one).
         '''
         # todo
-        raise NotImplementedError
+        scores = torch.matmul(query, key.transpose(-2, -1)) / math.sqrt(self.head_dim)
+        weights = torch.softmax(scores, dim=-1)
+        dropouts = self.attn_dropout(weights)
+        res = torch.matmul(dropouts, value)
+
+        return res
 
     def forward(
         self,
@@ -140,14 +145,14 @@ class Attention(nn.Module):
         query = query.transpose(1, 2)  # (bs, n_local_heads, seqlen, head_dim)
         key = key.transpose(1, 2)
         value = value.transpose(1, 2)
-        output = self.compute_query_key_value_scores(query, key, value)
+        res = self.compute_query_key_value_scores(query, key, value)
 
         # restore time as batch dimension and concat heads
-        output = output.transpose(1, 2).contiguous().view(batch_size, seqlen, -1)
+        res = res.transpose(1, 2).contiguous().view(batch_size, seqlen, -1)
 
         # final projection into the residual stream
-        output = self.resid_dropout(self.compute_output(output))
-        return output
+        res = self.resid_dropout(self.compute_output(res))
+        return res
 
 
 class FeedForward(nn.Module):
@@ -199,14 +204,20 @@ class LlamaLayer(nn.Module):
         The transformer block should consist of:
         1) layer normalization of the input (via Root Mean Square layer normalization)
         2) self-attention on the layer-normalized input
-        3) a residual connection (i.e., add the input to the output of the self-attention)
-        3) layer normalization on the output of the self-attention
-        4) a feed-forward network on the layer-normalized output of the self-attention
-        5) add a residual connection from the unnormalized self-attention output to the
-           output of the feed-forward network
+        3) a residual connection (i.e., add the input to the res of the self-attention)
+        3) layer normalization on the res of the self-attention
+        4) a feed-forward network on the layer-normalized res of the self-attention
+        5) add a residual connection from the unnormalized self-attention res to the
+           res of the feed-forward network
         '''
-        # todo
-        raise NotImplementedError
+        attn_output = self.attention(self.attention_norm(x))
+        x = x + attn_output
+
+        forward_fed_output = self.feed_forward(self.ffn_norm(x))
+        x = x + forward_fed_output
+
+        return x
+
 
 class Llama(LlamaPreTrainedModel):
     def __init__(self, config: LlamaConfig):
@@ -225,10 +236,10 @@ class Llama(LlamaPreTrainedModel):
         for layer_id in range(config.n_layers):
             self.layers.append(LlamaLayer(layer_id, config))
         self.norm = RMSNorm(config.dim, eps=config.layer_norm_eps)
-        self.output = nn.Linear(config.dim, config.vocab_size, bias=False)
+        self.res = nn.Linear(config.dim, config.vocab_size, bias=False)
 
         # share the unembedding parameters with the embedding parameters
-        self.tok_embeddings.weight = self.output.weight # https://paperswithcode.com/method/weight-tying
+        self.tok_embeddings.weight = self.res.weight # https://paperswithcode.com/method/weight-tying
 
         # some useful precompute for the RoPE relative positional embeddings
 
@@ -255,7 +266,7 @@ class Llama(LlamaPreTrainedModel):
         2) Run the embedded tokens through the stack of transformer layers
            (self.layers), followed by the final RMSNorm (self.norm).
         3) Project the final hidden state to logits over the vocabulary
-           (self.output). If `targets` is None (inference time), it is
+           (self.res). If `targets` is None (inference time), it is
            sufficient (and more efficient) to only compute logits for the
            very last position in the sequence, since that's the only one
            needed for next-token prediction; keep the time dimension by
@@ -269,7 +280,20 @@ class Llama(LlamaPreTrainedModel):
         _batch_size, seqlen = tokens.shape
             
         # todo
-        raise NotImplementedError
+        h = self.tok_embeddings(tokens)
+        h = self.dropout(h)
+
+        for layer in self.layers:
+            h = layer(h)
+
+        h = self.norm(h)
+
+        if targets is not None:
+            logits = self.res(h)
+        else:
+            logits = self.res(h[:, [-1], :])
+
+        return logits, h
 
     @torch.inference_mode()
     def generate(self, idx, max_new_tokens, temperature=1.0):
@@ -303,7 +327,9 @@ class Llama(LlamaPreTrainedModel):
                 Note that we are not using top-k sampling/nucleus sampling in this procedure.
                 '''
                 # todo
-                raise NotImplementedError
+                logits = logits / temperature
+                probs = torch.softmax(logits, dim=-1)
+                idx_next = torch.multinomial(probs, num_samples=1)
             # append sampled index to the running sequence and continue
             idx = torch.cat((idx, idx_next), dim=1)
 
